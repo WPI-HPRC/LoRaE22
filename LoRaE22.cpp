@@ -1,6 +1,7 @@
 #include "./LoRaE22.h"
+#include <Arduino.h>
 
-// #define DEBUG
+#define DEBUG
 
 /// @brief BLOCKING. Please feed in config & changeSerialConfig callback prior to calling.
 /// handles all the crap to init the module. DO NOT set pinModes or anything prior to calling, this function does it all.
