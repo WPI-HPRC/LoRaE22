@@ -145,7 +145,7 @@ class RxBuffer
                     // SerialUSB.printf("%0X",msgArr[msgFront].data[0]);
                     msgIdx++;
                 }
-                if(msgIdx == newMsg.length){ // we've reached the end of the message
+                if(msgIdx == newMsg.length+1){ // we've reached the end of the message
                     inMessage = false;
                     pushMessage(newMsg);
                     // SerialUSB.println("msg done!");

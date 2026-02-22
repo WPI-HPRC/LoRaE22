@@ -70,6 +70,7 @@ class LoRaE22 {
         bool remoteWriteConfigTemporary(uint8_t* configBuffer, uint8_t length);
 
         int8_t getRSSIAmbientNoise();
+        int8_t getBothRSSI();
         int8_t getRSSILastRX();
 
         // read from radio registers

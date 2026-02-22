@@ -239,6 +239,7 @@ bool LoRaE22::setFrequency(float freqMHz){
 uint8_t LoRaE22::getByte()
 {
     return serial->read();
+    // return rxBuffer.popByte();
 };
 
 void LoRaE22::sendByte(uint8_t _byte)
@@ -264,6 +265,15 @@ int8_t LoRaE22::getRSSIAmbientNoise()
 {
     for(size_t i = 0; i<sizeof(Commands::READ_AMBIENT_RSSI); i++){
         serial->write(Commands::READ_AMBIENT_RSSI[i]);
+    }
+
+    return 0;
+}
+
+int8_t LoRaE22::getBothRSSI()
+{
+    for(size_t i = 0; i<sizeof(Commands::READ_BOTH_RSSI); i++){
+        serial->write(Commands::READ_BOTH_RSSI[i]);
     }
 
     return 0;
@@ -519,27 +529,30 @@ bool LoRaE22::writeConfigPersistent(uint8_t* buffer, uint8_t length)
         // SerialUSB.println(serial->read());
     // }
 
-    while(serial->available() < length-1){yield();digitalToggle(6);};
-    while(serial->available() >= length-1){
-        serial->readBytes((uint8_t*)&readData, sizeof(readData));
-    }
-    
-    // return value should be
-    // C1 00 09 AA BB CC DD EE FF GG HH II
-    #ifdef DEBUG
-    for(size_t i = 0; i<lengthRead; i++){
-        SerialUSB.printf("%02x ", readData[i]);
-    }
-    SerialUSB.println();
-    #endif
+    // if(checkConfigMatches() == 0){return 0;};
+    // return 1;
 
-    if(readData[0] != Commands::READ){return false;}; // read failed
-    if(readData[1] != RadioConfigTypes::ConfigRegisters::AddressHigh){return false;}; // read failed
-    if(readData[2] != 0x09){return false;}; // read failed
-    // check if any of the written data is incorrect
-    for(size_t i = 0; i<length; i++){
-        if(readData[i+3] != buffer[i]){return false;};
-    }
+    // while(serial->available() < length-1){yield();digitalToggle(LED_BUILTIN);};
+    // while(serial->available() >= length-1){
+    //     serial->readBytes((uint8_t*)&readData, sizeof(readData));
+    // }
+    
+    // // return value should be
+    // // C1 00 09 AA BB CC DD EE FF GG HH II
+    // #ifdef DEBUG
+    // for(size_t i = 0; i<lengthRead; i++){
+    //     SerialUSB.printf("%02x ", readData[i]);
+    // }
+    // SerialUSB.println();
+    // #endif
+
+    // if(readData[0] != Commands::READ){return false;}; // read failed
+    // if(readData[1] != RadioConfigTypes::ConfigRegisters::AddressHigh){return false;}; // read failed
+    // if(readData[2] != 0x09){return false;}; // read failed
+    // // check if any of the written data is incorrect
+    // for(size_t i = 0; i<length; i++){
+    //     if(readData[i+3] != buffer[i]){return false;};
+    // }
 
     return true;
 };
