@@ -1,7 +1,7 @@
 #include "./LoRaE22.h"
 #include <Arduino.h>
 
-#define DEBUG
+// #define DEBUG
 
 /// @brief BLOCKING. Please feed in config & changeSerialConfig callback prior to calling.
 /// handles all the crap to init the module. DO NOT set pinModes or anything prior to calling, this function does it all.
@@ -20,6 +20,8 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
     setMode(RadioMode::Normal);
     
     delay(3);
+
+    SerialUSB.println("waiting for mudle");
 
     // tight loop if the radio module isn't ready
     waitForModule();
@@ -379,9 +381,9 @@ ConfigStatus LoRaE22::readConfigRegisters()
     serial->write(0x09); // want to read all config registers
     serial->flush();
 
-    delay(5);
-    while((size_t)serial->available() < length-1){yield();};
-    if((size_t)serial->available() == length-1){
+    delay(20);
+    while(serial->available() < length-1){yield();};
+    if(serial->available() == length-1){
         serial->readBytes((uint8_t*)&readData, sizeof(readData));
     }
     
