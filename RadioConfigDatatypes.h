@@ -2,13 +2,13 @@
 #include <Arduino.h>
 
 namespace Commands{
-    const uint8_t WRITE_PERMANENT = 0xC0;
-    const uint8_t READ = 0xC1;
-    const uint8_t WRITE_TEMPORARY = 0xC2;
-    const uint8_t REMOTE_PREAMBLE[2] = {0xCF, 0xCF};
-    const uint8_t READ_AMBIENT_RSSI[6] = {0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x01};
-    const uint8_t READ_BOTH_RSSI[6] = {0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x02};
-    const uint8_t READ_RSSI[6] = {0xC0, 0xC1, 0xC2, 0xC3, 0x01, 0x01};
+    constexpr uint8_t WRITE_PERMANENT = 0xC0;
+    constexpr uint8_t READ = 0xC1;
+    constexpr uint8_t WRITE_TEMPORARY = 0xC2;
+    constexpr uint8_t REMOTE_PREAMBLE[2] = {0xCF, 0xCF};
+    constexpr uint8_t READ_AMBIENT_RSSI[6] = {0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x01};
+    constexpr uint8_t READ_BOTH_RSSI[6] = {0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x02};
+    constexpr uint8_t READ_RSSI[6] = {0xC0, 0xC1, 0xC2, 0xC3, 0x01, 0x01};
 };
 
 namespace RadioConfigTypes
@@ -111,14 +111,20 @@ enum ConfigRegisters {
     EncryptionHighByte = 0x07,
     EncryptionLowByte = 0x08,
 
-    ProductIDStartByte = 0x80
+    ProductIDStartByte = 0x80,
+    ProductIDEndByte = 0x86,
 };
+
+enum ConfigRegisterLengths {
+    ConfigRegisterLength = 0x09,
+    ProductIDLength = 0x07
+}
 
 };
 
 struct RadioConfig
 {
-    float frequency; // kHz
+    uint32_t frequency; // kHz
     uint16_t address;
     uint8_t networkId;
     uint16_t encryptionKey;
@@ -161,21 +167,21 @@ struct RadioConfig
     }
 
     void print(){
-        SerialUSB.println("freq:" + String(frequency));
-        SerialUSB.println("addr:" + String(address));
-        SerialUSB.println("netid:" + String(networkId));
-        SerialUSB.println("key:" + String(encryptionKey));
-        SerialUSB.println("parity:" + String(parityConfig));
-        SerialUSB.println("serial:" + String(serialSpeed));
-        SerialUSB.println("air:" + String(airDataRate));
-        SerialUSB.println("packet:" + String(packetSize));
-        SerialUSB.println("ambient:" + String(ambientRSSIEnabled));
-        SerialUSB.println("rssi:" + String(rssiReadingsEnabled));
-        SerialUSB.println("power:" + String(txPower));
-        SerialUSB.println("dest:" + String(destination));
-        SerialUSB.println("relay:" + String(relayMode));
-        SerialUSB.println("wor:" + String(worMode));
-        SerialUSB.println("period:" + String(worPeriod));
+        Serial.println("freq:" + String(frequency));
+        Serial.println("addr:" + String(address));
+        Serial.println("netid:" + String(networkId));
+        Serial.println("key:" + String(encryptionKey));
+        Serial.println("parity:" + String(parityConfig));
+        Serial.println("serial:" + String(serialSpeed));
+        Serial.println("air:" + String(airDataRate));
+        Serial.println("packet:" + String(packetSize));
+        Serial.println("ambient:" + String(ambientRSSIEnabled));
+        Serial.println("rssi:" + String(rssiReadingsEnabled));
+        Serial.println("power:" + String(txPower));
+        Serial.println("dest:" + String(destination));
+        Serial.println("relay:" + String(relayMode));
+        Serial.println("wor:" + String(worMode));
+        Serial.println("period:" + String(worPeriod));
     }
 };
 

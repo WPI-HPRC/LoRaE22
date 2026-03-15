@@ -6,9 +6,9 @@
 #include "TxByteBuffer.h"
 #include "RxBuffer.h"
 
-#define BYTE_BUFFER_SIZE 1024
-#define MAX_MESSAGE_SIZE (240 - 6 - 2) // we want a message to fit into one packet
-#define MESSAGE_BUFFER_SIZE 128
+// #define BYTE_BUFFER_SIZE 1024
+// #define MAX_MESSAGE_SIZE (240 - 6 - 2) // we want a message to fit into one packet
+// #define MESSAGE_BUFFER_SIZE 128
 
 using namespace RadioConfigTypes;
 
@@ -25,53 +25,54 @@ class LoRaE22 {
 
         // do we have a message
         bool hasMessage();
-        // get a message
+        // get a messagef
         bool getMessage(uint8_t *buffer, size_t bufferLength, uint16_t& messageLength);
         // send a message
         bool sendMessage(const uint8_t* data, size_t length);
 
-        // THIS WILL IMMEDIEATELY CHANGE MODE. Please wait for the module to be ready using `ModuleReady()` or `waitForModule()`
-        void setMode(RadioConfigTypes::RadioMode mode);
+        // if the module is fine to be changed, this will change mode immediately
+        bool setMode(RadioConfigTypes::RadioMode mode);
 
         /// @brief This sets the value only in uC memory. Write to the radio with writeConfigPersistent() or writeConfigTemporary()
         /// @param config Config we want to set. Please ensure that the `frequency` field is within legal range for your band
         void setConfig(RadioConfig config){ radioConfig = config; };
 
         /// @brief Public facing function that includes legality checking for setting frequency.
-        /// @param freqMHz Desired frequency in MHz. Please set in 125kHz steps.
+        /// @param freqMHz Desired frequency in MHz. Please set in 250KHz steps.
         /// @return true if was able to set successfully (matches laws). Returns false otherwise
         bool setFrequency(float freqMHz);
 
         // get methods
         RadioConfig getConfig(){return radioConfig; };
 
-        size_t dataAvailable(){ return serial->available(); };
+        size_t dataAvailableCount(){ return serial->available(); };
 
-        // DO NOT USE
-        uint8_t getByte();
-        // DO NOT USE
-        bool getDataStruct(const void *dataStruct, size_t _size);
-
-        // DO NOT USE
+        // Primarily for testing purposes
         void sendByte(uint8_t _byte);
-        // DO NOT USE
-        bool sendDataStruct(const void *dataStruct, size_t _size);
+        uint8_t getByte();
 
         // Reads AUX
-        // very confusing to use, better documentation will be done later
+        // this is very pooly documentated in the datasheet, and the datasheet seems to be somewhat wrong.
+        // to my best understanding, the module uses this as a "ready" indicator.
+        // when the module is "not ready", it may:
+        // - drop bytes that are sent to it to be transmitted, due to full internal buffer
+        // - drop received bytes in its internal buffer
+        // - not recognize operating mode change
+        // - not recognize new configuration commands
+        // pay careful attention to this
         bool moduleReady();
         void waitForModule(){while(!moduleReady()){yield();};};
         
         // write to radio registers
         size_t buildConfigBuffer(uint8_t* buffer);
-        bool writeConfigPersistent(uint8_t* configBuffer, uint8_t length);
-        bool writeConfigTemporary(uint8_t* configBuffer, uint8_t length);
-        bool remoteWriteConfigPersistent(uint8_t* configBuffer, uint8_t length);
-        bool remoteWriteConfigTemporary(uint8_t* configBuffer, uint8_t length);
+        bool writeConfigPersistent(uint8_t* configBuffer, size_t length);
+        bool writeConfigTemporary(uint8_t* configBuffer, size_t length);
+        bool remoteWriteConfigPersistent(uint8_t* configBuffer, size_t length);
+        bool remoteWriteConfigTemporary(uint8_t* configBuffer, size_t length);
 
-        int8_t getRSSIAmbientNoise();
-        int8_t getBothRSSI();
-        int8_t getRSSILastRX();
+        void requestRSSIAmbientNoise();
+        void requestBothRSSI();
+        void requestRSSILastRX();
 
         // read from radio registers
         int8_t checkConfigMatches();
@@ -79,6 +80,11 @@ class LoRaE22 {
         bool readProductInfo();
 
     private:
+        constexpr float BAND_LOW_MHZ = 222.000;
+        constexpr float BAND_HIGH_MHZ = 225.000;
+        constexpr uint32_t CHANNEL_WIDTH_KHZ = 250;
+        constexpr uint32_t BASE_FREQ_KHZ = 220125;
+
         // read the actual register
         ConfigStatus readConfigRegisters();
 
