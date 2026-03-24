@@ -6,9 +6,13 @@
 #include "TxByteBuffer.h"
 #include "RxBuffer.h"
 
-// #define BYTE_BUFFER_SIZE 1024
-// #define MAX_MESSAGE_SIZE (240 - 6 - 2) // we want a message to fit into one packet
-// #define MESSAGE_BUFFER_SIZE 128
+#define BYTE_BUFFER_SIZE 1024
+#define MAX_MESSAGE_SIZE (240 - 6 - 2) // we want a message to fit into one packet
+#define MESSAGE_BUFFER_SIZE 128
+#define BAND_LOW_MHZ 222.000
+#define BAND_HIGH_MHZ 225.000
+#define CHANNEL_WIDTH_KHZ 250
+#define BASE_FREQ_KHZ 220125
 
 using namespace RadioConfigTypes;
 
@@ -61,7 +65,7 @@ class LoRaE22 {
         // - not recognize new configuration commands
         // pay careful attention to this
         bool moduleReady();
-        void waitForModule(){while(!moduleReady()){yield();};};
+        void waitForModule();
         
         // write to radio registers
         size_t buildConfigBuffer(uint8_t* buffer);
@@ -80,10 +84,6 @@ class LoRaE22 {
         bool readProductInfo();
 
     private:
-        constexpr float BAND_LOW_MHZ = 222.000;
-        constexpr float BAND_HIGH_MHZ = 225.000;
-        constexpr uint32_t CHANNEL_WIDTH_KHZ = 250;
-        constexpr uint32_t BASE_FREQ_KHZ = 220125;
 
         // read the actual register
         ConfigStatus readConfigRegisters();
@@ -105,7 +105,7 @@ class LoRaE22 {
         // de-form bytes
         void deformSerialConfigByte(uint8_t byteIn, RadioConfig *config);
         void deformRadioConfigByte(uint8_t byteIn, RadioConfig *config);
-        float deformFrequencyByte(uint8_t byteIn);
+        uint32_t deformFrequencyByte(uint8_t byteIn);
         void deformOptionConfigByte(uint8_t byteIn, RadioConfig *config);
 
         // hardware interfaces

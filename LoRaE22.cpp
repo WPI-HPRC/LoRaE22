@@ -28,15 +28,16 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
 
     setMode(RadioMode::Normal);
     
-    delay(3);
+    
 
     #ifdef DEBUG
-        SerialUSB.println("waiting for moudle");
+        SerialUSB.println("waiting for module");
     #endif
 
     // tight loop if the radio module isn't ready
     waitForModule();
-
+    
+    delay(50);
     #ifdef DEBUG
         SerialUSB.println("module ready");
     #endif
@@ -58,16 +59,23 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
         SerialUSB.println("reading config");
     #endif
 
-    
+    delay(10);
+
 
     size_t attemptCounter = 0;
     int8_t status;
     do{
+        #ifdef DEBUG
+            SerialUSB.print("attempt: "); SerialUSB.println(attemptCounter);
+        #endif
         status = checkConfigMatches();
+        #ifdef DEBUG
+            SerialUSB.print("result: "); SerialUSB.println(status);
+        #endif
         attemptCounter++;
         waitForModule();
     }
-    while(allowedAttempts == 0 || (status == -1 && attemptCounter < allowedAttempts));
+    while((allowedAttempts == 0 && status == -1) || (status == -1 && attemptCounter < allowedAttempts));
 
     if(status == 0){ 
         setMode(RadioMode::Normal);
@@ -89,11 +97,14 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
     attemptCounter = 0;
     bool success = true;
     do {
+        #ifdef DEBUG
+            SerialUSB.print("attempt: "); SerialUSB.println(attemptCounter);
+        #endif
         waitForModule(); // wait for module to be ready
         success = writeConfigPersistent(configBuffer, length); // write the dang config
         attemptCounter++;
     }
-    while(allowedAttempts == 0 || (!success && attemptCounter < allowedAttempts));
+    while((allowedAttempts == 0 && status == -1) || (status == -1 && attemptCounter < allowedAttempts));
 
     if(!success){return -1;};
 
@@ -153,7 +164,7 @@ bool LoRaE22::hasMessage()
 
 bool LoRaE22::getMessage(uint8_t* buffer, size_t bufferLength, uint16_t& messageLength)
 {
-    if(!rxBuffer.hasMessage()){
+    if(!hasMessage()){
         return false;
     }
 
@@ -193,8 +204,19 @@ bool LoRaE22::sendMessage(const uint8_t* data, size_t length)
 
 bool LoRaE22::moduleReady()
 {
-    return digitalRead(AUX);
+    return digitalRead(AUX) > 0;
 }
+
+void LoRaE22::waitForModule()
+{
+    while(!moduleReady()){
+        yield();
+        #ifdef DEBUG
+            // SerialUSB.print("wait");
+            SerialUSB.println(digitalRead(AUX));
+        #endif
+    };
+};
 
 bool LoRaE22::setMode(RadioConfigTypes::RadioMode mode)
 {
@@ -243,26 +265,20 @@ void LoRaE22::requestRSSIAmbientNoise()
     for(size_t i = 0; i<sizeof(Commands::READ_AMBIENT_RSSI); i++){
         serial->write(Commands::READ_AMBIENT_RSSI[i]);
     }
-
-    return 0;
 }
 
-bool LoRaE22::requestBothRSSI()
+void LoRaE22::requestBothRSSI()
 {
     for(size_t i = 0; i<sizeof(Commands::READ_BOTH_RSSI); i++){
         serial->write(Commands::READ_BOTH_RSSI[i]);
     }
-
-    return 0;
 }
 
-bool LoRaE22::requestRSSILastRX()
+void LoRaE22::requestRSSILastRX()
 {
     for(size_t i = 0; i<sizeof(Commands::READ_RSSI); i++){
         serial->write(Commands::READ_RSSI[i]);
     }
-
-    return 0;
 }
 
 
@@ -337,7 +353,7 @@ void LoRaE22::deformRadioConfigByte(uint8_t byteIn, RadioConfig *config)
 // REG2 in datasheet
 uint32_t LoRaE22::deformFrequencyByte(uint8_t byteIn)
 {
-    float offsetKHz = byteIn * LORA_CHANNEL_WIDTH;
+    float offsetKHz = byteIn * CHANNEL_WIDTH_KHZ;
     return (offsetKHz) + BASE_FREQ_KHZ;
 };
 
@@ -409,9 +425,9 @@ int8_t LoRaE22::checkConfigMatches()
 {
     ConfigStatus readConfig = readConfigRegisters();
     if(!readConfig.readSuccessfully){return -1;};
-
-    // readConfig.config.print();
-
+    #ifdef DEBUG
+        readConfig.config.print();
+    #endif
     if(readConfig.config == radioConfig){
         return 0; // read successfully and config matches
     }
@@ -535,6 +551,8 @@ bool LoRaE22::writeConfigTemporary(uint8_t* buffer, size_t length)
     }
     SerialUSB.println();
     #endif
+
+    return true;
 }
 
 bool LoRaE22::remoteWriteConfigPersistent(uint8_t* buffer, size_t length)

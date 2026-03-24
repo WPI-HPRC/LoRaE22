@@ -118,7 +118,7 @@ enum ConfigRegisters {
 enum ConfigRegisterLengths {
     ConfigRegisterLength = 0x09,
     ProductIDLength = 0x07
-}
+};
 
 };
 
