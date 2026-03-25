@@ -1,7 +1,7 @@
 #include "./LoRaE22.h"
 #include <Arduino.h>
 
-// #define DEBUG
+#define DEBUG
 
 /// @brief BLOCKING. Please feed in config & changeSerialConfig callback prior to calling.
 /// handles all the crap to init the module. DO NOT set pinModes or anything prior to calling, this function does it all.
@@ -19,7 +19,6 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
     pinMode(AUX, INPUT);
     #endif
     
-    
     pinMode(M0, OUTPUT);
     pinMode(M1, OUTPUT);
 
@@ -27,8 +26,6 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
     changeSerialConfiguration(RadioConfigTypes::SerialSpeeds::BAUD_9600, RadioConfigTypes::ParityConfig::Parity_8N1);
 
     setMode(RadioMode::Normal);
-    
-    
 
     #ifdef DEBUG
         SerialUSB.println("waiting for module");
@@ -37,13 +34,9 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
     // tight loop if the radio module isn't ready
     waitForModule();
     
-    delay(50);
+    delay(10);
     #ifdef DEBUG
         SerialUSB.println("module ready");
-    #endif
-
-    
-    #ifdef DEBUG
         SerialUSB.println("entering programming mode");
     #endif
 
@@ -61,15 +54,12 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
 
     delay(10);
 
-
     size_t attemptCounter = 0;
     int8_t status;
     do{
-        #ifdef DEBUG
-            SerialUSB.print("attempt: "); SerialUSB.println(attemptCounter);
-        #endif
         status = checkConfigMatches();
         #ifdef DEBUG
+            SerialUSB.print("read config attempt: "); SerialUSB.println(attemptCounter);
             SerialUSB.print("result: "); SerialUSB.println(status);
         #endif
         attemptCounter++;
@@ -83,7 +73,12 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
         changeSerialConfiguration(radioConfig.serialSpeed, radioConfig.parityConfig);
         return 0; 
     }; // read successfully and matches, we're good! early returns goated
-    if(status == -1){ return -1; }; // uh-oh. we failed to read (means module failed to init properly). early return
+    if(status == -1){
+        waitForModule();
+        changeSerialConfiguration(radioConfig.serialSpeed, radioConfig.parityConfig);
+        return -1;
+
+    }; // uh-oh. we failed to read (means module failed to init properly). early return
     // keep going if status == 1 (config read successfully but doesn't match)
 
     // if our config didn't match, then we write out config to the radio module to make it match!
@@ -97,17 +92,21 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
     attemptCounter = 0;
     bool success = true;
     do {
-        #ifdef DEBUG
-            SerialUSB.print("attempt: "); SerialUSB.println(attemptCounter);
-        #endif
-        waitForModule(); // wait for module to be ready
         success = writeConfigPersistent(configBuffer, length); // write the dang config
+        #ifdef DEBUG
+            SerialUSB.print("write config attempt: "); SerialUSB.println(attemptCounter);
+            SerialUSB.print("result: "); SerialUSB.println(success);
+        #endif
         attemptCounter++;
+        waitForModule(); // wait for module to be ready
     }
     while((allowedAttempts == 0 && status == -1) || (status == -1 && attemptCounter < allowedAttempts));
 
-    if(!success){return -1;};
-
+    if(!success){
+        waitForModule();
+        changeSerialConfiguration(radioConfig.serialSpeed, radioConfig.parityConfig);
+        return -1;
+    };
 
     #ifdef DEBUG
         SerialUSB.println("config written");
@@ -115,7 +114,6 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
     #endif
 
     // wait for module to complete
-
     waitForModule();
     changeSerialConfiguration(radioConfig.serialSpeed, radioConfig.parityConfig);
 
@@ -125,11 +123,8 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
     // wait for the module to complete transistion
     waitForModule();
     #ifdef DEBUG
-        SerialUSB.println("module in normal mode, reconfiguring serial port");
-    #endif
-    
-    // reconfigure our serial port to the correct value now
-    
+        SerialUSB.println("module in normal mode, ready for usage");
+    #endif 
 
     // we're done!! (and only had 5 tight loops in this function...)
     return 1; // init sucessfully, had to program radio
@@ -144,7 +139,6 @@ void LoRaE22::update()
         // SerialUSB.printf("%0X     ",byte);
         rxBuffer.pushByte(byte);
     }
-
 
     // // push any messages in the buffer out to the module
     // if(!txBuffer.empty()){
@@ -209,13 +203,18 @@ bool LoRaE22::moduleReady()
 
 void LoRaE22::waitForModule()
 {
+    delay(3);
+    if(firstCall){
+        firstCall = false;
+        timeoutStart = millis();
+    }
     while(!moduleReady()){
         yield();
-        #ifdef DEBUG
-            // SerialUSB.print("wait");
-            SerialUSB.println(digitalRead(AUX));
-        #endif
+        if(millis()-timeoutStart > timeoutMS){
+            break;
+        }
     };
+    firstCall = true;
 };
 
 bool LoRaE22::setMode(RadioConfigTypes::RadioMode mode)
@@ -385,18 +384,15 @@ ConfigStatus LoRaE22::readConfigRegisters()
     serial->flush();
 
     delay(20);
-    while(serial->available() < length-1){yield();};
-    if(serial->available() == length-1){
-        serial->readBytes((uint8_t*)&readData, sizeof(readData));
-    }
+    serial->readBytes((uint8_t*)&readData, sizeof(readData));
     
     // return value should be
     // C1 00 09 AA BB CC DD EE FF GG HH II
     #ifdef DEBUG
-    for(size_t i = 0; i<length; i++){
-        SerialUSB.printf("%02x ", readData[i]);
-    }
-    SerialUSB.println();
+        for(size_t i = 0; i<length; i++){
+            SerialUSB.printf("%02x ", readData[i]);
+        }
+        SerialUSB.println();
     #endif
 
     if(readData[0] != Commands::READ){output.readSuccessfully = false; return output;}; // read failed
@@ -464,18 +460,15 @@ bool LoRaE22::readProductInfo()
 
     
     delay(20);
-    while(serial->available() < length-1){yield();};
-    if(serial->available() == length-1){
-        serial->readBytes((uint8_t*)&readData, sizeof(readData));
-    }
+    serial->readBytes((uint8_t*)&readData, sizeof(readData));
 
     // return value should be
     // C1 80 07 AA BB CC DD EE FF GG
     #ifdef DEBUG
-    for(size_t i = 0; i<length; i++){
-        SerialUSB.printf("%02x ", readData[i]);
-    }
-    SerialUSB.println();
+        for(size_t i = 0; i<length; i++){
+            SerialUSB.printf("%02x ", readData[i]);
+        }
+        SerialUSB.println();
     #endif
 
     // return value should be
@@ -522,11 +515,11 @@ bool LoRaE22::writeConfigPersistent(uint8_t* buffer, size_t length)
     serial->flush(); // ensure we block until the write is done
 
     #ifdef DEBUG
-    SerialUSB.println("config to write:");
-    for(size_t i = 0; i<length; i++){
-        SerialUSB.printf("%02x ", buffer[i]);
-    }
-    SerialUSB.println();
+        SerialUSB.println("config to write:");
+        for(size_t i = 0; i<length; i++){
+            SerialUSB.printf("%02x ", buffer[i]);
+        }
+        SerialUSB.println();
     #endif
 
     return true;
@@ -545,11 +538,11 @@ bool LoRaE22::writeConfigTemporary(uint8_t* buffer, size_t length)
     serial->flush(); // ensure we block until the write is done
 
     #ifdef DEBUG
-    SerialUSB.println("config to write:");
-    for(size_t i = 0; i<length; i++){
-        SerialUSB.printf("%02x ", buffer[i]);
-    }
-    SerialUSB.println();
+        SerialUSB.println("config to write:");
+        for(size_t i = 0; i<length; i++){
+            SerialUSB.printf("%02x ", buffer[i]);
+        }
+        SerialUSB.println();
     #endif
 
     return true;

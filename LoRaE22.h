@@ -24,6 +24,10 @@ class LoRaE22 {
 
         int8_t init(unsigned char allowedAttempts);
         void changeSerialPortCallback(bool (*fptr)(RadioConfigTypes::SerialSpeeds, RadioConfigTypes::ParityConfig)){changeSerialConfiguration = fptr; };
+        // we occasionally want to wait for the module to complete something. 
+        // this sets how long we wait before giving up and returning early
+        // should be greater than 1000ms (experimental testing)
+        void setTimeout(unsigned long TimeoutMS){timeoutMS = TimeoutMS;};
 
         void update();
 
@@ -65,6 +69,15 @@ class LoRaE22 {
         // - not recognize new configuration commands
         // pay careful attention to this
         bool moduleReady();
+        // waits for moduleReady() to become true (with timeout)
+        // this is very pooly documentated in the datasheet, and the datasheet seems to be somewhat wrong.
+        // to my best understanding, the module uses this as a "ready" indicator.
+        // when the module is "not ready", it may:
+        // - drop bytes that are sent to it to be transmitted, due to full internal buffer
+        // - drop received bytes in its internal buffer
+        // - not recognize operating mode change
+        // - not recognize new configuration commands
+        // pay careful attention to this
         void waitForModule();
         
         // write to radio registers
@@ -119,6 +132,10 @@ class LoRaE22 {
         RadioConfig radioConfig;
         uint8_t configBuffer[10];
         uint8_t productInfo[7];
+
+        unsigned long timeoutMS = 0;
+        unsigned long long timeoutStart =0;
+        bool firstCall = true;
 
 
         ParityConfig getParityConfig(int);
