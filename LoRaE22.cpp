@@ -1,0 +1,732 @@
+#include "./LoRaE22.h"
+#include <Arduino.h>
+
+#define DEBUG
+
+/// @brief BLOCKING. Please feed in config & changeSerialConfig callback prior to calling.
+/// handles all the crap to init the module. DO NOT set pinModes or anything prior to calling, this function does it all.
+/// @param allowedAttempts number of times we let it try to program/read the radio module before giving up
+/// @return 0 if init OK and module was already programmed, 1 if module inited but had to be programmed, -1 if module failed to init
+int8_t LoRaE22::init(uint8_t allowedAttempts)
+{
+    // configure our additional hardware pins
+
+    // not initing the pin as a digital mode leaves it in a High-Z state. which seems to work better with the module on polaris (teensy 4.0/MM).
+    // this may need to be changed when tested with MARS.
+    #ifdef POLARIS 
+    // pinMode(AUX, INPUT);
+    #else
+    pinMode(AUX, INPUT);
+    #endif
+    
+    pinMode(M0, OUTPUT);
+    pinMode(M1, OUTPUT);
+
+    // inital config for programming
+    changeSerialConfiguration(RadioConfigTypes::SerialSpeeds::BAUD_9600, RadioConfigTypes::ParityConfig::Parity_8N1);
+
+    setMode(RadioMode::Normal);
+
+    #ifdef DEBUG
+        SerialUSB.println("waiting for module");
+    #endif
+
+    // tight loop if the radio module isn't ready
+    waitForModule();
+    
+    delay(10);
+    #ifdef DEBUG
+        SerialUSB.println("module ready");
+        SerialUSB.println("entering programming mode");
+    #endif
+
+    // read out the existing config
+    setMode(RadioMode::Program);
+
+    delay(3);
+
+    // tight loop meh badness
+    waitForModule();
+    
+    #ifdef DEBUG
+        SerialUSB.println("reading config");
+    #endif
+
+    delay(10);
+
+    size_t attemptCounter = 0;
+    int8_t status;
+    do{
+        status = checkConfigMatches();
+        #ifdef DEBUG
+            SerialUSB.print("read config attempt: "); SerialUSB.println(attemptCounter);
+            SerialUSB.print("result: "); SerialUSB.println(status);
+        #endif
+        attemptCounter++;
+        waitForModule();
+    }
+    while((allowedAttempts == 0 && status == -1) || (status == -1 && attemptCounter < allowedAttempts));
+
+    if(status == 0){ 
+        setMode(RadioMode::Normal);
+        waitForModule();
+        changeSerialConfiguration(radioConfig.serialSpeed, radioConfig.parityConfig);
+        return 0; 
+    }; // read successfully and matches, we're good! early returns goated
+    if(status == -1){
+        waitForModule();
+        changeSerialConfiguration(radioConfig.serialSpeed, radioConfig.parityConfig);
+        return -1;
+
+    }; // uh-oh. we failed to read (means module failed to init properly). early return
+    // keep going if status == 1 (config read successfully but doesn't match)
+
+    // if our config didn't match, then we write out config to the radio module to make it match!
+    #ifdef DEBUG
+        SerialUSB.println("config didn't match, writing config");
+    #endif
+
+    // let's write our config
+    size_t length = buildConfigBuffer((uint8_t*)configBuffer); // build config buffer
+
+    attemptCounter = 0;
+    bool success = true;
+    do {
+        success = writeConfigPersistent(configBuffer, length); // write the dang config
+        #ifdef DEBUG
+            SerialUSB.print("write config attempt: "); SerialUSB.println(attemptCounter);
+            SerialUSB.print("result: "); SerialUSB.println(success);
+        #endif
+        attemptCounter++;
+        waitForModule(); // wait for module to be ready
+    }
+    while((allowedAttempts == 0 && status == -1) || (status == -1 && attemptCounter < allowedAttempts));
+
+    if(!success){
+        waitForModule();
+        changeSerialConfiguration(radioConfig.serialSpeed, radioConfig.parityConfig);
+        return -1;
+    };
+
+    #ifdef DEBUG
+        SerialUSB.println("config written");
+        SerialUSB.println(success);
+    #endif
+
+    // wait for module to complete
+    waitForModule();
+    changeSerialConfiguration(radioConfig.serialSpeed, radioConfig.parityConfig);
+
+    // set radio back to normal operating mode
+    setMode(RadioMode::Normal);
+
+    // wait for the module to complete transistion
+    waitForModule();
+    #ifdef DEBUG
+        SerialUSB.println("module in normal mode, ready for usage");
+    #endif 
+
+    // we're done!! (and only had 5 tight loops in this function...)
+    return 1; // init sucessfully, had to program radio
+};
+
+void LoRaE22::update()
+{
+    // push any serial data we have to the receieve buffer
+    size_t bytesAvailable = serial->available(); // this prevents being stuck in a tight loop constantly feeding the buffer
+    while(bytesAvailable > 0){
+        uint8_t byte = serial->read();
+        rxBuffer.push(byte);
+        bytesAvailable--;
+    }
+
+    // push any messages in the buffer out to the module
+    size_t bytesToTX = txBuffer.size();
+    while(bytesToTX > 0){
+        uint8_t byte = txBuffer.shift();
+        serial.write(byte);
+        bytesToTX--;
+    }
+
+    foundMessage = checkForMessage();
+
+    return;
+}
+
+bool checkForMessage()
+{
+    if(rxBuffer.size() < strlen(callsign)){return false;} // check if we even have enough bytes
+
+    size_t possibleMessageIndex = i;
+    for(size_t i=0;i<rxBuffer.size(); i++){
+        // quick scan for the first character
+        if(rxBuffer[i] == callsign[0]){
+            // check the remaining characters
+            for(uint8_t j = 1;j<strlen(callsign); j++){
+                if(callsign[j] != rxBuffer[i+j]){
+                    return false;
+                }
+                // early return if things didn't match, 
+                // so if we got here then we should have found it
+                possibleMessageIndex = i;
+            }
+        }
+    }
+    // if we're close enough to the end that we can't pull the length byte, then return early
+    if((rxBuffer.size() - possibleMessageIndex) < (strlen(callsign) + 1)){
+        return false;
+    }
+    // get length byte
+    uint8_t messageLength = rxBuffer[possibleMessageIndex + strlen(callsign) + 1];
+
+    // finally, let's see if we have the full message already
+    size_t endIndex = possibleMessageIndex + strlen(callsign) + 1 + messageLength;
+    if((rxBuffer.size()-possibleMessageIndex) < endIndex){
+        return false;
+    }
+    // if we've passed all those checks, then we're good
+    lastMessageIndex = possibleMessageIndex;
+    return true;
+}
+
+bool LoRaE22::hasMessage()
+{
+    return foundMessage;
+}
+
+bool LoRaE22::getMessage(uint8_t* buffer, size_t bufferLength, uint8_t& messageLength)
+{
+    if(!hasMessage()){
+        return false;
+    }
+
+    // shift out all old data before this message
+    for(size_t i=0;i<lastMessageIndex; i++){
+        rxBuffer.shift();
+    }
+    // shift out callsign
+    for(uint8_t i=0;i<strlen(callsign);i++){ 
+        rxBuffer.shift();
+    }
+
+    uint8_t packetLength = rxBuffer.shift();
+    
+
+    size_t i = 0;
+    // inefficent memcpy
+    while(i<packetLength && i< bufferLength){
+        buffer[i] = rxBuffer.shift();
+        i++;
+    }
+
+    messageLength = packetLength;
+    if(packetLength>bufferLength){return false;} // if we couldn't copy all the data, then return false
+    return true; // otherwise, return true
+
+}
+
+bool LoRaE22::sendMessage(const uint8_t* data, size_t length)
+{
+    // write callsign
+    for(size_t i = 0; i<strlen(callsign); i++){
+        txBuffer.push(callsign[i]);
+    }
+    // insert payload length
+    txBuffer.push(length & 0xFF);
+
+    for(size_t i = 0; i<length; i++){
+        txBuffer.push(data[i]);
+    }
+
+    return true;
+}
+
+
+bool LoRaE22::moduleReady()
+{
+    return digitalRead(AUX) > 0;
+}
+
+void LoRaE22::waitForModule()
+{
+    delay(3);
+    if(firstCall){
+        firstCall = false;
+        timeoutStart = millis();
+    }
+    while(!moduleReady()){
+        yield();
+        if(millis()-timeoutStart > timeoutMS){
+            break;
+        }
+    };
+    firstCall = true;
+};
+
+bool LoRaE22::setMode(RadioConfigTypes::RadioMode mode)
+{
+    if(!moduleReady()){return false;};
+    radioMode = mode;
+    switch(mode){
+        case RadioConfigTypes::RadioMode::Normal:
+            digitalWrite(M0, 0);
+            digitalWrite(M1, 0);
+            break;
+        case RadioConfigTypes::RadioMode::WakeUp:
+            digitalWrite(M0, 1);
+            digitalWrite(M1, 0);
+            break;
+        case RadioConfigTypes::RadioMode::Program:
+            digitalWrite(M0, 0);
+            digitalWrite(M1, 1);
+            break;
+        case RadioConfigTypes::RadioMode::PowerDown:
+            digitalWrite(M0, 1);
+            digitalWrite(M1, 1);
+            break;
+    }
+    return true;
+};
+
+bool LoRaE22::setFrequency(float freqMHz){
+    if(freqMHz < BAND_LOW_MHZ || freqMHz > BAND_HIGH_MHZ){return false;}; // ILLEGAL per FCC.
+    radioConfig.frequency = (uint32_t)(freqMHz*1000);
+    return true;
+}
+
+uint8_t LoRaE22::getByte()
+{
+    return serial->read();
+    // return rxBuffer.popByte();
+};
+
+void LoRaE22::sendByte(uint8_t _byte)
+{
+    serial->write(_byte); //serial->flush();
+};
+
+void LoRaE22::requestRSSIAmbientNoise()
+{
+    for(size_t i = 0; i<sizeof(Commands::READ_AMBIENT_RSSI); i++){
+        serial->write(Commands::READ_AMBIENT_RSSI[i]);
+    }
+}
+
+void LoRaE22::requestBothRSSI()
+{
+    for(size_t i = 0; i<sizeof(Commands::READ_BOTH_RSSI); i++){
+        serial->write(Commands::READ_BOTH_RSSI[i]);
+    }
+}
+
+void LoRaE22::requestRSSILastRX()
+{
+    for(size_t i = 0; i<sizeof(Commands::READ_RSSI); i++){
+        serial->write(Commands::READ_RSSI[i]);
+    }
+}
+
+
+
+////////////////////////////////////////// Form Config Register Bytes //////////////////////////////////////////////
+
+// REG0 in datasheet
+uint8_t LoRaE22::formSerialConfigByte()
+{
+    uint8_t newByte = ( 
+                      (radioConfig.serialSpeed << 5) 
+                    | (radioConfig.parityConfig << 3) 
+                    | (radioConfig.airDataRate << 0)
+                    );
+    return newByte;
+};
+
+// REG1 in datasheet
+uint8_t LoRaE22::formRadioConfigByte()
+{
+    uint8_t newByte = (
+                      (radioConfig.packetSize << 6)
+                    | (radioConfig.ambientRSSIEnabled << 5)
+                    | (radioConfig.txPower << 0)
+                    );
+    return newByte;
+};
+
+// REG2 in datasheet
+uint8_t LoRaE22::formFrequencyByte()
+{
+    // this is checked on the public facing set, but we check it again to be safe
+    uint offset = (radioConfig.frequency - BASE_FREQ_KHZ); // in KHz
+    uint8_t offsetCount = (offset / CHANNEL_WIDTH_KHZ); // each offset is a 250KHz channel spacing
+    return offsetCount;
+};
+
+// REG3 in datasheet
+uint8_t LoRaE22::formOptionConfigByte()
+{
+    uint8_t newByte = (
+                      (radioConfig.rssiReadingsEnabled << 7)
+                    | (radioConfig.destination << 6)
+                    | (radioConfig.relayMode << 5)
+                    | (radioConfig.listenBeforeTxEnable << 4)
+                    | (radioConfig.worMode << 3)
+                    | (radioConfig.worPeriod << 0)
+                    );
+    return newByte;
+};
+
+
+
+////////////////////////////////////////// De-Form Config Register Bytes //////////////////////////////////////////////
+
+// REG0 in datasheet
+void LoRaE22::deformSerialConfigByte(uint8_t byteIn, RadioConfig *config)
+{
+    config->serialSpeed = getSerialSpeed(byteIn >> 5);
+    config->parityConfig = getParityConfig((byteIn & 0b00011000) >> 3);
+    config->airDataRate = getAirDataRate(byteIn & 0b00000111);
+};
+
+// REG1 in datasheet
+void LoRaE22::deformRadioConfigByte(uint8_t byteIn, RadioConfig *config)
+{
+    config->packetSize = getPacketSize((byteIn & 0b11000000) >> 6);
+    config->ambientRSSIEnabled = getEnableRSSI((byteIn & 0b00100000) >> 5);
+    config->txPower = getTransmitPower(byteIn & 0b00000011);
+};
+
+// REG2 in datasheet
+uint32_t LoRaE22::deformFrequencyByte(uint8_t byteIn)
+{
+    float offsetKHz = byteIn * CHANNEL_WIDTH_KHZ;
+    return (offsetKHz) + BASE_FREQ_KHZ;
+};
+
+// REG3 in datasheet
+void LoRaE22::deformOptionConfigByte(uint8_t byteIn, RadioConfig *config)
+{
+    config->rssiReadingsEnabled = getEnableRSSI((byteIn & 0b10000000) >> 7);
+    config->destination = getDestination((byteIn & 0b01000000) >> 6);
+    config->relayMode = getRelayMode((byteIn & 0b00100000) >> 5);
+    config->listenBeforeTxEnable = getListenBeforeTX((byteIn & 0b00010000) >> 4);
+    config->worMode = getWORMode((byteIn & 0b00001000) >> 3);
+    config->worPeriod = getWORPeriod(byteIn & 0b00000111);
+};
+
+////////////////////////////////////////// Read Config ////////////////////////////////////////////////////////////////////////////////////////////
+
+// internal func
+ConfigStatus LoRaE22::readConfigRegisters()
+{
+    ConfigStatus output;
+    output.readSuccessfully = true;
+
+    size_t length = ConfigRegisterLengths::ConfigRegisterLength + 3;
+    uint8_t readData[length];
+
+    serial->write(Commands::READ);
+    serial->write(ConfigRegisters::AddressHigh);
+    serial->write(ConfigRegisterLengths::ConfigRegisterLength); // want to read all config registers
+    serial->flush();
+
+    delay(20);
+    serial->readBytes((uint8_t*)&readData, sizeof(readData));
+    
+    // return value should be
+    // C1 00 09 AA BB CC DD EE FF GG HH II
+    #ifdef DEBUG
+        for(size_t i = 0; i<length; i++){
+            SerialUSB.printf("%02x ", readData[i]);
+        }
+        SerialUSB.println();
+    #endif
+
+    if(readData[0] != Commands::READ){output.readSuccessfully = false; return output;}; // read failed
+    if(readData[1] != ConfigRegisters::AddressHigh){output.readSuccessfully = false; return output;}; // read failed
+    if(readData[2] != ConfigRegisterLengths::ConfigRegisterLength){output.readSuccessfully = false; return output;}; // read failed
+
+    // make us a simpler array
+    uint8_t registerValues[ConfigRegisterLengths::ConfigRegisterLength];
+    memcpy(&registerValues, &readData[3], sizeof(registerValues));
+
+    // build a new config to compare to
+    output.config.address = (registerValues[RadioConfigTypes::ConfigRegisters::AddressHigh] << 8) | (registerValues[RadioConfigTypes::ConfigRegisters::AddressLow] << 0);
+    output.config.networkId = registerValues[RadioConfigTypes::ConfigRegisters::NetworkID];
+    deformSerialConfigByte(registerValues[RadioConfigTypes::ConfigRegisters::SerialConfigRegister], &output.config);
+    output.config.frequency = deformFrequencyByte(registerValues[RadioConfigTypes::ConfigRegisters::FrequencyChannel]);
+    deformRadioConfigByte(registerValues[RadioConfigTypes::ConfigRegisters::RadioConfigRegister], &output.config);
+    deformOptionConfigByte(registerValues[RadioConfigTypes::ConfigRegisters::OptionConfigRegister], &output.config);
+    output.config.encryptionKey = (registerValues[RadioConfigTypes::ConfigRegisters::EncryptionHighByte] << 8) | (registerValues[RadioConfigTypes::ConfigRegisters::EncryptionLowByte] << 0);
+
+    return output;
+}
+
+/// @brief Checks that config is the same as in memory. Place into programming mode before running this!
+/// @return 0 if read successfully and matches. 1 if does not match. -1 if read failed
+int8_t LoRaE22::checkConfigMatches()
+{
+    ConfigStatus readConfig = readConfigRegisters();
+    if(!readConfig.readSuccessfully){return -1;};
+    #ifdef DEBUG
+        readConfig.config.print();
+    #endif
+    if(readConfig.config == radioConfig){
+        return 0; // read successfully and config matches
+    }
+    return 1; // config did not match, read successfully
+};
+
+/// @brief Reads config from radio module into memory memory. Place into programming mode before running this!
+/// @return true if read successfully. false if failed.
+bool LoRaE22::readConfigIntoMemory()
+{
+    ConfigStatus readConfig = readConfigRegisters();
+    if(!readConfig.readSuccessfully){return false;};
+
+    radioConfig = readConfig.config;
+    return true;
+};
+
+// place into programming mode before running this
+// returns true if read correctly, false if not
+bool LoRaE22::readProductInfo()
+{
+    for(int i=0; i<7; i++){
+        productInfo[i] = 0;
+    }
+    bool success = true;
+
+    size_t length = ConfigRegisterLengths::ProductIDLength + 3;
+    uint8_t readData[ConfigRegisterLengths::ProductIDLength+3];
+
+    serial->write(Commands::READ);
+    serial->write(ConfigRegisters::ProductIDStartByte); // start address
+    serial->write(ConfigRegisterLengths::ProductIDLength); // want to read all 7 bytes
+    serial->flush();
+
+    
+    delay(20);
+    serial->readBytes((uint8_t*)&readData, sizeof(readData));
+
+    // return value should be
+    // C1 80 07 AA BB CC DD EE FF GG
+    #ifdef DEBUG
+        for(size_t i = 0; i<length; i++){
+            SerialUSB.printf("%02x ", readData[i]);
+        }
+        SerialUSB.println();
+    #endif
+
+    // return value should be
+    // C1 80 07 AA BB CC DD EE FF GG
+    if(readData[0] != Commands::READ){return false;};
+    if(readData[1] != ConfigRegisters::ProductIDStartByte){return false;};
+    if(readData[2] != ConfigRegisterLengths::ProductIDLength){return false;};
+
+    // if we pass all those checks, copy our data into our productInfo array
+    memcpy(&productInfo, &readData[3], sizeof(productInfo));
+
+    return success;
+};
+
+
+////////////////////////////////////////// Write Config ////////////////////////////////////////////////////////////////////////////////////////////
+
+// build byte buffer of config bytes before sending
+size_t LoRaE22::buildConfigBuffer(uint8_t* buffer)
+{
+    // build config buffer
+    buffer[RadioConfigTypes::ConfigRegisters::AddressHigh] = (radioConfig.address >> 8) & 0xFF;
+    buffer[RadioConfigTypes::ConfigRegisters::AddressLow] = radioConfig.address & 0xFF;
+    buffer[RadioConfigTypes::ConfigRegisters::NetworkID] = radioConfig.networkId;
+    buffer[RadioConfigTypes::ConfigRegisters::SerialConfigRegister] = formSerialConfigByte();
+    buffer[RadioConfigTypes::ConfigRegisters::RadioConfigRegister] = formRadioConfigByte();
+    buffer[RadioConfigTypes::ConfigRegisters::FrequencyChannel] = formFrequencyByte();
+    buffer[RadioConfigTypes::ConfigRegisters::OptionConfigRegister] = formOptionConfigByte();
+    buffer[RadioConfigTypes::ConfigRegisters::EncryptionHighByte] = (radioConfig.encryptionKey >> 8) & 0xFF;
+    buffer[RadioConfigTypes::ConfigRegisters::EncryptionLowByte] = radioConfig.encryptionKey & 0xFF;
+    
+    return ConfigRegisterLengths::ConfigRegisterLength;
+};
+
+// place into programming mode before running this
+// this will save the config into the flash of the radio module and will persist through power cycles
+bool LoRaE22::writeConfigPersistent(uint8_t* buffer, size_t length)
+{
+    // write our data out
+    serial->write(Commands::WRITE_PERMANENT);
+    serial->write((uint8_t)RadioConfigTypes::ConfigRegisters::AddressHigh); // our starting address
+    serial->write(length); // length we will write
+    serial->write(buffer, length);
+    serial->flush(); // ensure we block until the write is done
+
+    #ifdef DEBUG
+        SerialUSB.println("config to write:");
+        for(size_t i = 0; i<length; i++){
+            SerialUSB.printf("%02x ", buffer[i]);
+        }
+        SerialUSB.println();
+    #endif
+
+    return true;
+};
+
+
+// place into programming mode before running this
+// this will NOT save the config into the flash of the radio module and will NOT persist through power cycles
+bool LoRaE22::writeConfigTemporary(uint8_t* buffer, size_t length)
+{
+    // write our data out
+    serial->write(Commands::WRITE_TEMPORARY);
+    serial->write((uint8_t)RadioConfigTypes::ConfigRegisters::AddressHigh); // our starting address
+    serial->write(length); // length we will write
+    serial->write(buffer, length);
+    serial->flush(); // ensure we block until the write is done
+
+    #ifdef DEBUG
+        SerialUSB.println("config to write:");
+        for(size_t i = 0; i<length; i++){
+            SerialUSB.printf("%02x ", buffer[i]);
+        }
+        SerialUSB.println();
+    #endif
+
+    return true;
+}
+
+bool LoRaE22::remoteWriteConfigPersistent(uint8_t* buffer, size_t length)
+{
+    for(size_t i = 0; i<sizeof(Commands::REMOTE_PREAMBLE); i++){
+        serial->write(Commands::REMOTE_PREAMBLE[i]);
+    }
+    return writeConfigPersistent(buffer, length);
+}
+
+bool LoRaE22::remoteWriteConfigTemporary(uint8_t* buffer, size_t length)
+{
+    for(size_t i = 0; i<sizeof(Commands::REMOTE_PREAMBLE); i++){
+        serial->write(Commands::REMOTE_PREAMBLE[i]);
+    }
+    return writeConfigTemporary(buffer, length);
+};
+
+ // these were written by ChatGPT...
+// --- ParityConfig ---
+enum ParityConfig LoRaE22::getParityConfig(int input) {
+    switch (input) {
+        case Parity_8N1: return Parity_8N1;
+        case Parity_8O1: return Parity_8O1;
+        case Parity_8E1: return Parity_8E1;
+    }
+    return Parity_8N1;
+};
+
+// --- SerialSpeeds ---
+enum SerialSpeeds LoRaE22::getSerialSpeed(int input) {
+    switch (input) {
+        case BAUD_1200:   return BAUD_1200;
+        case BAUD_2400:   return BAUD_2400;
+        case BAUD_4800:   return BAUD_4800;
+        case BAUD_9600:   return BAUD_9600;
+        case BAUD_19200:  return BAUD_19200;
+        case BAUD_38400:  return BAUD_38400;
+        case BAUD_57600:  return BAUD_57600;
+        case BAUD_115200: return BAUD_115200;
+    }
+    return BAUD_9600;
+};
+
+// --- AirDataRate ---
+enum AirDataRate LoRaE22::getAirDataRate(int input) {
+    switch (input) {
+        case 0b000:
+        case 0b001:
+        case RATE_2400: return RATE_2400;
+        case RATE_4800: return RATE_4800;
+        case RATE_9600: return RATE_9600;
+        case RATE_15600:
+        case 0b111: return RATE_15600;
+    }
+    return RATE_2400;
+};
+
+// --- PacketSize ---
+enum PacketSize LoRaE22::getPacketSize(int input) {
+    switch (input) {
+        case SIZE_240: return SIZE_240;
+        case SIZE_128: return SIZE_128;
+        case SIZE_64:  return SIZE_64;
+        case SIZE_32:  return SIZE_32;
+    }
+    return SIZE_240;
+};
+
+// --- EnableRSSIReadings ---
+enum EnableRSSIReadings LoRaE22::getEnableRSSI(int input) {
+    if(input > 0){
+        return EnableRSSIReadings::Enabled;
+    }
+    return EnableRSSIReadings::Disabled;
+};
+
+// --- TransmitPower ---
+enum TransmitPower LoRaE22::getTransmitPower(int input) {
+    switch (input) {
+        case dBm33: return dBm33;
+        case dBm30: return dBm30;
+        case dBm27: return dBm27;
+        case dBm24: return dBm24;
+    }
+    return dBm33;
+};
+
+// --- Destination ---
+enum Destination LoRaE22::getDestination(int input) {
+    switch (input) {
+        case Broadcast: return Broadcast;
+        case Unicast:   return Unicast;
+    }
+    return Broadcast;
+};
+
+// --- RelayMode ---
+enum RelayMode LoRaE22::getRelayMode(int input) {
+    switch (input) {
+        case RelayDisabled: return RelayMode::RelayDisabled;
+        case RelayEnabled:  return RelayMode::RelayEnabled;
+    }
+    return RelayDisabled;
+};
+
+// --- EnableListenBeforeTX ---
+enum EnableListenBeforeTX LoRaE22::getListenBeforeTX(int input) {
+    switch (input) {
+        case LBTDisabled: return EnableListenBeforeTX::LBTDisabled;
+        case LBTEnabled:  return EnableListenBeforeTX::LBTEnabled;
+    }
+    return LBTDisabled;
+};
+
+// --- WakeOnReceiveMode ---
+enum WakeOnReceiveMode LoRaE22::getWORMode(int input) {
+    switch (input) {
+        case NormalWOR:     return WakeOnReceiveMode::NormalWOR;
+        case ListenOnly: return WakeOnReceiveMode::ListenOnly;
+    }
+    return NormalWOR;
+};
+
+// --- WakeOnReceiveListenPeriod ---
+enum WakeOnReceiveListenPeriod LoRaE22::getWORPeriod(int input) {
+    switch (input) {
+        case TIME_500:  return TIME_500;
+        case TIME_1000: return TIME_1000;
+        case TIME_1500: return TIME_1500;
+        case TIME_2000: return TIME_2000;
+        case TIME_2500: return TIME_2500;
+        case TIME_3000: return TIME_3000;
+        case TIME_3500: return TIME_3500;
+        case TIME_4000: return TIME_4000;
+    }
+    return TIME_500;
+};  
