@@ -27,7 +27,7 @@ class LoRaE22 {
         // should be greater than 1000ms (experimental testing)
         void setTimeout(unsigned long TimeoutMS){timeoutMS = TimeoutMS;};
 
-        void update();
+        bool update();
 
         // do we have a message
         bool hasMessage();

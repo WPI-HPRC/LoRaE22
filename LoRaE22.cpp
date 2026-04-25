@@ -130,7 +130,7 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
     return 1; // init sucessfully, had to program radio
 };
 
-void LoRaE22::update()
+bool LoRaE22::update()
 {
     // push any serial data we have to the receieve buffer
     size_t bytesAvailable = serial->available(); // this prevents being stuck in a tight loop constantly feeding the buffer
@@ -142,15 +142,17 @@ void LoRaE22::update()
 
     // push any messages in the buffer out to the module
     size_t bytesToTX = txBuffer.size();
-    while(bytesToTX > 0){
+    while(bytesToTX > 0 && moduleReady()){
         uint8_t byte = txBuffer.shift();
         serial->write(byte);
         bytesToTX--;
     }
 
+
+
     foundMessage = checkForMessage();
 
-    return;
+    return (bytesToTX == 0);
 }
 
 bool LoRaE22::checkForMessage()
