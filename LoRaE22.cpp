@@ -144,7 +144,7 @@ void LoRaE22::update()
     size_t bytesToTX = txBuffer.size();
     while(bytesToTX > 0){
         uint8_t byte = txBuffer.shift();
-        serial.write(byte);
+        serial->write(byte);
         bytesToTX--;
     }
 
@@ -153,11 +153,11 @@ void LoRaE22::update()
     return;
 }
 
-bool checkForMessage()
+bool LoRaE22::checkForMessage()
 {
     if(rxBuffer.size() < strlen(callsign)){return false;} // check if we even have enough bytes
 
-    size_t possibleMessageIndex = i;
+    size_t possibleMessageIndex = 0;
     for(size_t i=0;i<rxBuffer.size(); i++){
         // quick scan for the first character
         if(rxBuffer[i] == callsign[0]){

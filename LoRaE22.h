@@ -18,7 +18,7 @@ class LoRaE22 {
 
     public:
         LoRaE22(HardwareSerial *serialPort, uint8_t Pin_M0, uint8_t Pin_M1, uint8_t Pin_AUX, const char* Callsign)
-            : callsign(Callsign), rxBuffer(BYTE_BUFFER_SIZE, MESSAGE_BUFFER_SIZE, Callsign), serial(serialPort), M0(Pin_M0), M1(Pin_M1), AUX(Pin_AUX) {};
+            : callsign(Callsign), serial(serialPort), M0(Pin_M0), M1(Pin_M1), AUX(Pin_AUX) {};
 
         int8_t init(unsigned char allowedAttempts);
         void changeSerialPortCallback(bool (*fptr)(RadioConfigTypes::SerialSpeeds, RadioConfigTypes::ParityConfig)){changeSerialConfiguration = fptr; };
@@ -95,6 +95,7 @@ class LoRaE22 {
         CircularBuffer<uint8_t, BYTE_BUFFER_SIZE> rxBuffer;
         size_t lastMessageIndex;
         bool foundMessage;
+        bool checkForMessage();
 
         // form bytes
         uint8_t formSerialConfigByte();
