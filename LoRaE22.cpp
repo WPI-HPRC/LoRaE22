@@ -133,66 +133,112 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
 void LoRaE22::update()
 {
     // push any serial data we have to the receieve buffer
-    size_t bytesAvailable = dataAvailableCount(); // this prevents being stuck in a tight loop constantly feeding the buffer
+    size_t bytesAvailable = serial->available(); // this prevents being stuck in a tight loop constantly feeding the buffer
     while(bytesAvailable > 0){
         uint8_t byte = serial->read();
-        // SerialUSB.printf("%0X     ",byte);
-        rxBuffer.pushByte(byte);
+        rxBuffer.push(byte);
+        bytesAvailable--;
     }
 
-    // // push any messages in the buffer out to the module
-    // if(!txBuffer.empty()){
-    //     uint8_t byte;
-    //     txBuffer.pop(byte);
+    // push any messages in the buffer out to the module
+    size_t bytesToTX = txBuffer.size();
+    while(bytesToTX > 0){
+        uint8_t byte = txBuffer.shift();
+        serial.write(byte);
+        bytesToTX--;
+    }
 
-    //     serial->write(byte);
-    // }
+    foundMessage = checkForMessage();
 
     return;
 }
 
-bool LoRaE22::hasMessage()
+bool checkForMessage()
 {
-    return !rxBuffer.isMsgEmpty();
+    if(rxBuffer.size() < strlen(callsign)){return false;} // check if we even have enough bytes
+
+    size_t possibleMessageIndex = i;
+    for(size_t i=0;i<rxBuffer.size(); i++){
+        // quick scan for the first character
+        if(rxBuffer[i] == callsign[0]){
+            // check the remaining characters
+            for(uint8_t j = 1;j<strlen(callsign); j++){
+                if(callsign[j] != rxBuffer[i+j]){
+                    return false;
+                }
+                // early return if things didn't match, 
+                // so if we got here then we should have found it
+                possibleMessageIndex = i;
+            }
+        }
+    }
+    // if we're close enough to the end that we can't pull the length byte, then return early
+    if((rxBuffer.size() - possibleMessageIndex) < (strlen(callsign) + 1)){
+        return false;
+    }
+    // get length byte
+    uint8_t messageLength = rxBuffer[possibleMessageIndex + strlen(callsign) + 1];
+
+    // finally, let's see if we have the full message already
+    size_t endIndex = possibleMessageIndex + strlen(callsign) + 1 + messageLength;
+    if((rxBuffer.size()-possibleMessageIndex) < endIndex){
+        return false;
+    }
+    // if we've passed all those checks, then we're good
+    lastMessageIndex = possibleMessageIndex;
+    return true;
 }
 
-bool LoRaE22::getMessage(uint8_t* buffer, size_t bufferLength, uint16_t& messageLength)
+bool LoRaE22::hasMessage()
+{
+    return foundMessage;
+}
+
+bool LoRaE22::getMessage(uint8_t* buffer, size_t bufferLength, uint8_t& messageLength)
 {
     if(!hasMessage()){
         return false;
     }
 
-    // uint8_t dataBuf[240] = new uint8_t[240];
-    Message msgRx = rxBuffer.getFrontMessage();
-    size_t len = msgRx.length;
-
-    if(len > bufferLength){
-        memcpy(buffer, msgRx.data, bufferLength);
-        return false;
+    // shift out all old data before this message
+    for(size_t i=0;i<lastMessageIndex; i++){
+        rxBuffer.shift();
+    }
+    // shift out callsign
+    for(uint8_t i=0;i<strlen(callsign);i++){ 
+        rxBuffer.shift();
     }
 
-    memcpy(buffer, msgRx.data, len);
-    messageLength = len;
+    uint8_t packetLength = rxBuffer.shift();
     
-    rxBuffer.popMessage();
 
-    return true;
+    size_t i = 0;
+    // inefficent memcpy
+    while(i<packetLength && i< bufferLength){
+        buffer[i] = rxBuffer.shift();
+        i++;
+    }
+
+    messageLength = packetLength;
+    if(packetLength>bufferLength){return false;} // if we couldn't copy all the data, then return false
+    return true; // otherwise, return true
+
 }
 
 bool LoRaE22::sendMessage(const uint8_t* data, size_t length)
 {
-
     // write callsign
     for(size_t i = 0; i<strlen(callsign); i++){
-        serial->write(callsign[i]);
+        txBuffer.push(callsign[i]);
     }
     // insert payload length
-    serial->write(length & 0xFF);
+    txBuffer.push(length & 0xFF);
 
+    for(size_t i = 0; i<length; i++){
+        txBuffer.push(data[i]);
+    }
 
-    size_t lengthWritten = serial->write(data, length);
-
-    return (length == lengthWritten);
+    return true;
 }
 
 

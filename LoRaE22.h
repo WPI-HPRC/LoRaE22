@@ -2,13 +2,11 @@
 #include <Arduino.h>
 #include <HardwareSerial.h>
 #include "RadioConfigDatatypes.h"
-// #include "RxMessageBuffer.h"
-#include "TxByteBuffer.h"
-#include "RxBuffer.h"
+#include "CircularBuffer/CircularBuffer.hpp"
 
 #define BYTE_BUFFER_SIZE 1024
-#define MAX_MESSAGE_SIZE (240 - 6 - 2) // we want a message to fit into one packet
-#define MESSAGE_BUFFER_SIZE 128
+
+
 #define BAND_LOW_MHZ 222.000
 #define BAND_HIGH_MHZ 225.000
 #define CHANNEL_WIDTH_KHZ 250
@@ -33,8 +31,8 @@ class LoRaE22 {
 
         // do we have a message
         bool hasMessage();
-        // get a messagef
-        bool getMessage(uint8_t *buffer, size_t bufferLength, uint16_t& messageLength);
+        // get a message
+        bool getMessage(uint8_t *buffer, size_t bufferLength, uint8_t& messageLength);
         // send a message
         bool sendMessage(const uint8_t* data, size_t length);
 
@@ -53,8 +51,6 @@ class LoRaE22 {
         // get methods
         RadioConfig getConfig(){return radioConfig; };
 
-        size_t dataAvailableCount(){ return serial->available(); };
-
         // Primarily for testing purposes
         void sendByte(uint8_t _byte);
         uint8_t getByte();
@@ -70,14 +66,7 @@ class LoRaE22 {
         // pay careful attention to this
         bool moduleReady();
         // waits for moduleReady() to become true (with timeout)
-        // this is very pooly documentated in the datasheet, and the datasheet seems to be somewhat wrong.
-        // to my best understanding, the module uses this as a "ready" indicator.
-        // when the module is "not ready", it may:
-        // - drop bytes that are sent to it to be transmitted, due to full internal buffer
-        // - drop received bytes in its internal buffer
-        // - not recognize operating mode change
-        // - not recognize new configuration commands
-        // pay careful attention to this
+        // see documentation for moduleReady() for more details
         void waitForModule();
         
         // write to radio registers
@@ -97,17 +86,15 @@ class LoRaE22 {
         bool readProductInfo();
 
     private:
-
         // read the actual register
         ConfigStatus readConfigRegisters();
 
         const char* callsign;
 
-        // have an input and output buffer
-        uint16_t maxMessageSize = MAX_MESSAGE_SIZE;
-        uint8_t maxMessageCount = MESSAGE_BUFFER_SIZE;
-        RxBuffer rxBuffer;
-        TxByteBuffer<BYTE_BUFFER_SIZE> txBuffer;
+        CircularBuffer<uint8_t, BYTE_BUFFER_SIZE> txBuffer;
+        CircularBuffer<uint8_t, BYTE_BUFFER_SIZE> rxBuffer;
+        size_t lastMessageIndex;
+        bool foundMessage;
 
         // form bytes
         uint8_t formSerialConfigByte();
@@ -136,7 +123,6 @@ class LoRaE22 {
         unsigned long timeoutMS = 0;
         unsigned long long timeoutStart =0;
         bool firstCall = true;
-
 
         ParityConfig getParityConfig(int);
         SerialSpeeds getSerialSpeed(int);
