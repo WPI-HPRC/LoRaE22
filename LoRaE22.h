@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <HardwareSerial.h>
 #include "RadioConfigDatatypes.h"
-#include "CircularBuffer/CircularBuffer.hpp"
+#include "CircularBuffer.hpp"
 
 #define BYTE_BUFFER_SIZE 1024
 
