@@ -157,33 +157,38 @@ bool LoRaE22::update()
 
 bool LoRaE22::checkForMessage()
 {
-    if(rxBuffer.size() < strlen(callsign)){return false;} // check if we even have enough bytes
+    size_t callsignLen = strlen(callsign);
+    if(rxBuffer.size() < callsignLen){return false;} // not even enough bytes for the callsign
 
+    // scan the buffer for a packet addressed to us (prefixed with our callsign)
+    bool foundCallsign = false;
     size_t possibleMessageIndex = 0;
-    for(size_t i=0;i<rxBuffer.size(); i++){
-        // quick scan for the first character
-        if(rxBuffer[i] == callsign[0]){
-            // check the remaining characters
-            for(uint8_t j = 1;j<strlen(callsign); j++){
-                if(callsign[j] != rxBuffer[i+j]){
-                    return false;
-                }
-                // early return if things didn't match, 
-                // so if we got here then we should have found it
-                possibleMessageIndex = i;
+    for(size_t i = 0; i + callsignLen <= rxBuffer.size(); i++){
+        bool match = true;
+        for(size_t j = 0; j < callsignLen; j++){
+            if(rxBuffer[i+j] != callsign[j]){
+                match = false;
+                break; // not a match here; keep scanning later positions
             }
         }
+        if(match){
+            foundCallsign = true;
+            possibleMessageIndex = i; // take the first packet addressed to us
+            break;
+        }
     }
-    // if we're close enough to the end that we can't pull the length byte, then return early
-    if((rxBuffer.size() - possibleMessageIndex) < (strlen(callsign) + 1)){
+    if(!foundCallsign){return false;}
+
+    // make sure the length byte that follows the callsign has arrived
+    size_t lengthByteIndex = possibleMessageIndex + callsignLen;
+    if(rxBuffer.size() <= lengthByteIndex){
         return false;
     }
-    // get length byte
-    uint8_t messageLength = rxBuffer[possibleMessageIndex + strlen(callsign) + 1];
+    uint8_t messageLength = rxBuffer[lengthByteIndex];
 
-    // finally, let's see if we have the full message already
-    size_t endIndex = possibleMessageIndex + strlen(callsign) + 1 + messageLength;
-    if((rxBuffer.size()-possibleMessageIndex) < endIndex){
+    // finally, see if the full message has arrived: callsign + length byte + payload
+    size_t endIndex = possibleMessageIndex + callsignLen + 1 + messageLength;
+    if(rxBuffer.size() < endIndex){
         return false;
     }
     // if we've passed all those checks, then we're good
