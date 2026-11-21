@@ -20,7 +20,7 @@ class LoRaE22 {
 
     public:
         LoRaE22(HardwareSerial *serialPort, uint8_t Pin_M0, uint8_t Pin_M1, uint8_t Pin_AUX, const char* Callsign)
-            : callsign(Callsign), rxBuffer(BYTE_BUFFER_SIZE, MESSAGE_BUFFER_SIZE, Callsign), serial(serialPort), M0(Pin_M0), M1(Pin_M1), AUX(Pin_AUX) {};
+            : callsign(Callsign), rxBuffer(MESSAGE_BUFFER_SIZE, Callsign), serial(serialPort), M0(Pin_M0), M1(Pin_M1), AUX(Pin_AUX) {};
 
         int8_t init(unsigned char allowedAttempts);
         void changeSerialPortCallback(bool (*fptr)(RadioConfigTypes::SerialSpeeds, RadioConfigTypes::ParityConfig)){changeSerialConfiguration = fptr; };
@@ -29,13 +29,22 @@ class LoRaE22 {
         // should be greater than 1000ms (experimental testing)
         void setTimeout(unsigned long TimeoutMS){timeoutMS = TimeoutMS;};
 
+        // Moves bytes the module has received into the message queue. Call
+        // often (every loop): the serial RX buffer only holds
+        // SERIAL_RX_BUFFER_SIZE bytes.
         void update();
 
         // do we have a message
         bool hasMessage();
-        // get a messagef
+        // Copies the oldest received message into buffer and removes it from
+        // the queue. Returns false if there is none, or if it didn't fit in
+        // bufferLength (the message is dropped so the queue doesn't stall).
         bool getMessage(uint8_t *buffer, size_t bufferLength, uint16_t& messageLength);
-        // send a message
+        // messages lost because nobody read them before the queue filled
+        uint32_t droppedMessageCount(){ return rxBuffer.droppedCount(); };
+        // Sends one message, framed as <callsign><length><data>. length must be
+        // 1..MAX_MESSAGE_SIZE. Doesn't wait: the bytes go into the serial TX
+        // buffer (SERIAL_TX_BUFFER_SIZE), and it only blocks if that is full.
         bool sendMessage(const uint8_t* data, size_t length);
 
         // if the module is fine to be changed, this will change mode immediately

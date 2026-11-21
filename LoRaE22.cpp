@@ -1,7 +1,8 @@
 #include "./LoRaE22.h"
 #include <Arduino.h>
 
-#define DEBUG
+// Prints below are on only in DEBUG builds (the *_debug envs pass -D DEBUG,
+// which PlatformIO applies to libraries too).
 
 /// @brief BLOCKING. Please feed in config & changeSerialConfig callback prior to calling.
 /// handles all the crap to init the module. DO NOT set pinModes or anything prior to calling, this function does it all.
@@ -100,7 +101,7 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
         attemptCounter++;
         waitForModule(); // wait for module to be ready
     }
-    while((allowedAttempts == 0 && status == -1) || (status == -1 && attemptCounter < allowedAttempts));
+    while(!success && (allowedAttempts == 0 || attemptCounter < allowedAttempts));
 
     if(!success){
         waitForModule();
@@ -133,11 +134,11 @@ int8_t LoRaE22::init(uint8_t allowedAttempts)
 void LoRaE22::update()
 {
     // push any serial data we have to the receieve buffer
-    size_t bytesAvailable = dataAvailableCount(); // this prevents being stuck in a tight loop constantly feeding the buffer
-    while(bytesAvailable > 0){
-        uint8_t byte = serial->read();
-        // SerialUSB.printf("%0X     ",byte);
-        rxBuffer.pushByte(byte);
+    // Only what has arrived so far: bytes that keep coming in while we read
+    // wait for the next call, so this can't get stuck on a busy link.
+    size_t bytesAvailable = dataAvailableCount();
+    while(bytesAvailable-- > 0){
+        rxBuffer.pushByte((uint8_t)serial->read());
     }
 
     // // push any messages in the buffer out to the module
@@ -162,18 +163,17 @@ bool LoRaE22::getMessage(uint8_t* buffer, size_t bufferLength, uint16_t& message
         return false;
     }
 
-    // uint8_t dataBuf[240] = new uint8_t[240];
-    Message msgRx = rxBuffer.getFrontMessage();
+    const Message& msgRx = rxBuffer.getFrontMessage();
     size_t len = msgRx.length;
 
     if(len > bufferLength){
-        memcpy(buffer, msgRx.data, bufferLength);
+        rxBuffer.popMessage();
         return false;
     }
 
     memcpy(buffer, msgRx.data, len);
     messageLength = len;
-    
+
     rxBuffer.popMessage();
 
     return true;
@@ -181,6 +181,10 @@ bool LoRaE22::getMessage(uint8_t* buffer, size_t bufferLength, uint16_t& message
 
 bool LoRaE22::sendMessage(const uint8_t* data, size_t length)
 {
+    // the length goes on air as one byte, and the frame must fit one packet
+    if(length == 0 || length > MAX_MESSAGE_SIZE){
+        return false;
+    }
 
     // write callsign
     for(size_t i = 0; i<strlen(callsign); i++){
